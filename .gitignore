@@ -109,6 +109,7 @@ tools/*/*.i.tmp
 *.gcda
 
 # === Rules for release artifacts ===
+/dist/
 /*.tar.*
 /*.pkg
 /SHASUMS*.txt*

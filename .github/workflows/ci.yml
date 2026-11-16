@@ -1,0 +1,25 @@
+name: Release Scripts CI
+
+on:
+  push:
+    branches: [release]
+  pull_request:
+    branches: [release]
+
+permissions:
+  contents: read
+
+jobs:
+  test-scripts:
+    name: Test release mirror scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Ensure gpgv is installed
+        run: |
+          command -v gpgv >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y --no-install-recommends gpgv)
+
+      - name: Run unit tests
+        run: uv run --no-project --with requests python -m unittest discover -s scripts -p "test_*.py" -v

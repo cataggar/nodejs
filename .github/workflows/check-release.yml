@@ -1,0 +1,40 @@
+name: Check for new Node.js release
+
+on:
+  schedule:
+    - cron: "0 8 * * *" # Daily at 08:00 UTC
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write # Needed to trigger publish workflow
+    outputs:
+      new_versions: ${{ steps.check.outputs.new_versions }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Check for new release
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run scripts/check_node_release.py
+
+      - name: Trigger publish workflow
+        if: steps.check.outputs.new_versions != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSIONS: ${{ steps.check.outputs.new_versions }}
+        run: |
+          set -euo pipefail
+          # Only the highest stable version is published automatically; older lines can be mirrored manually via publish.yml.
+          tag="$(echo "${NEW_VERSIONS}" | jq -r '.[0]')"
+          echo "Triggering publish for ${tag}"
+          gh workflow run publish.yml --ref release -f tag="${tag}"
