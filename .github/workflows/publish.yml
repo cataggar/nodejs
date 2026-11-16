@@ -1,0 +1,139 @@
+name: Publish Node.js Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Node.js release tag or version to mirror (e.g. v26.13.1)"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: publish-nodejs-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Normalize and validate tag
+        id: meta
+        env:
+          RAW_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          trimmed="${RAW_TAG#"${RAW_TAG%%[![:space:]]*}"}"
+          trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+          version="${trimmed#v}"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid Node.js release tag or version: ${RAW_TAG}"
+            exit 1
+          fi
+          tag="v${version}"
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Ensure gpgv is installed
+        run: |
+          command -v gpgv >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y --no-install-recommends gpgv)
+
+      - name: Download and verify Node.js assets
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: uv run scripts/download_assets.py "${TAG}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nodejs-assets-${{ steps.meta.outputs.tag }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: download
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nodejs-assets-${{ needs.download.outputs.tag }}
+          path: dist/
+
+      - name: List verified assets
+        run: ls -lh dist/
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
+        with:
+          subject-path: dist/*
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.download.outputs.tag }}
+          VERSION: ${{ needs.download.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          TITLE="Node.js ${TAG}"
+          FLAGS=()
+
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            FLAGS+=(--prerelease)
+          else
+            CURRENT_LATEST="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
+            CURRENT_VER="${CURRENT_LATEST#v}"
+            if [[ -n "${CURRENT_VER}" && "${CURRENT_VER}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              HIGHEST="$(printf '%s\n%s\n' "${CURRENT_VER}" "${VERSION}" | sort -V | tail -n1)"
+              if [[ "${HIGHEST}" != "${VERSION}" ]]; then
+                FLAGS+=(--latest=false)
+              else
+                FLAGS+=(--latest)
+              fi
+            else
+              FLAGS+=(--latest)
+            fi
+          fi
+
+          NOTES_FILE="${RUNNER_TEMP}/release-notes.md"
+          cat <<EOF > "${NOTES_FILE}"
+          Mirrored from https://nodejs.org/dist/${TAG}/ ([download archive](https://nodejs.org/en/download/archive/${TAG})). Verified upstream \`SHASUMS256.txt.asc\` with \`gpgv\` against [\`nodejs/release-keys\`](https://github.com/nodejs/release-keys) and attested with GitHub Artifact Attestations. Install using [ghr](https://github.com/cataggar/ghr):
+
+          \`\`\`sh
+          ghr install ${GITHUB_REPOSITORY}@${TAG}
+          \`\`\`
+          EOF
+
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
+            gh release edit "${TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${TITLE}" \
+              --notes-file "${NOTES_FILE}" \
+              "${FLAGS[@]}"
+          else
+            gh release create "${TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target release \
+              --title "${TITLE}" \
+              --notes-file "${NOTES_FILE}" \
+              "${FLAGS[@]}" \
+              dist/*
+          fi

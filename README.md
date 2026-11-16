@@ -15,6 +15,29 @@ that discourage, exhaust, or otherwise negatively affect other participants.
 
 **This project has a [Code of Conduct][].**
 
+## `cataggar/nodejs` Fork & Mirror
+
+A mirror of official [Node.js](https://nodejs.org) release binaries packaged as `ghr`-compatible GitHub Releases with GitHub Artifact Attestations.
+
+### Branches
+
+* **`release`** (default) — Release mirror scripts (`scripts/`) and GitHub Actions workflows (`.github/workflows/`) that verify and publish official Node.js binaries for [`ghr`](https://github.com/cataggar/ghr).
+* **`main`** — Mirror of upstream [`nodejs/node`](https://github.com/nodejs/node) (`main`), synced daily.
+
+### Installing Releases with `ghr`
+
+Official Node.js release archives (`linux-x64`, `linux-x64-musl`, `linux-arm64`, `darwin-arm64`, `darwin-x64`, `win-x64`, `win-arm64`) are verified against [`nodejs/release-keys`](https://github.com/nodejs/release-keys) (`SHASUMS256.txt.asc`) before publishing and attested with SLSA v1 provenance:
+
+```sh
+ghr install cataggar/nodejs@v26.13.1
+```
+
+To copy a specific upstream tag manually (such as `v26.13.1` from <https://nodejs.org/en/download/archive/v26.13.1>), dispatch the `Publish Node.js Release` workflow:
+
+```sh
+gh workflow run publish.yml --repo cataggar/nodejs -f tag=v26.13.1
+```
+
 ## Table of contents
 
 * [Support](#support)
